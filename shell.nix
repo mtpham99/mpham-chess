@@ -1,11 +1,11 @@
 { pkgs ? import <nixpkgs> {} }:
 let
-	clang-version="18";
+	version="18";
 in
-pkgs.mkShell.override { stdenv = pkgs."clang${clang-version}Stdenv"; } {
+pkgs.mkShell.override { stdenv = pkgs."clang${version}Stdenv"; } {
 	packages = [
 		# clang run time
-		pkgs."clang-tools_${clang-version}"
+		pkgs."clang-tools_${version}"
 
 		# build systems
 		pkgs.cmake
@@ -17,7 +17,6 @@ pkgs.mkShell.override { stdenv = pkgs."clang${clang-version}Stdenv"; } {
 		# analyzers/formatters/linters
 		pkgs.pre-commit
 		pkgs.cppcheck
-		pkgs.cpplint
 		pkgs.include-what-you-use
 		pkgs.cmake-format
 		pkgs.cmake-lint

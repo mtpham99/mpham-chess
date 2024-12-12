@@ -1,14 +1,44 @@
+fail_fast: false
 repos:
-  - repo: https://github.com/pocc/pre-commit-hooks
-    rev: v1.3.5
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+  - repo: local
     hooks:
       - id: clang-format
+        name: clang-format
+        language: system
+        types: [c++]
+        entry: clang-format
+        args: ["-i"]
       - id: clang-tidy
+        name: clang-tidy
+        language: system
+        types: [c++]
+        entry: clang-tidy
+        args: ["-p=build"]
       - id: cppcheck
-      - id: cpplint
+        name: cppcheck
+        language: system
+        types: [c++]
+        entry: cppcheck
+        args: []
       - id: include-what-you-use
-  - repo: https://github.com/cheshirekow/cmake-format-precommit
-    rev: v0.6.10
-    hooks:
-    - id: cmake-format
-    - id: cmake-lint
+        name: include-what-you-use
+        language: system
+        types: [c++]
+        entry: iwyu_tool.py
+        args: ["-p=build"]
+      - id: cmake-format
+        name: cmake-format
+        language: system
+        types: [cmake]
+        entry: cmake-format
+        args: ["-i"]
+      - id: cmake-lint
+        name: cmake-lint
+        language: system
+        types: [cmake]
+        entry: cmake-lint
+        args: []
