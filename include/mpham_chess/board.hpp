@@ -1,5 +1,6 @@
 #pragma once
 
+#include "mpham_chess/attacks.hpp"
 #include "mpham_chess/bitboard.hpp"
 #include "mpham_chess/constants.hpp"
 #include "mpham_chess/enums.hpp"
@@ -9,6 +10,7 @@
 #include "detail/fixed_vector.hpp"
 
 #include <array>
+#include <concepts>
 #include <ostream>
 #include <string>
 #include <string_view>
@@ -25,6 +27,7 @@ struct state_info {
 
 using state_history = detail::fixed_vector<state_info, constants::max_ply>;
 using move_history = detail::fixed_vector<move, constants::max_ply>;
+
 using castle_king_squares = std::array<square, constants::n_colors>;
 using castle_rook_squares =
     std::array<std::array<square, constants::n_castle_sides>,
@@ -74,8 +77,20 @@ public:
   [[nodiscard]] unsigned int get_movenum() const noexcept;
   [[nodiscard]] unsigned int get_ply() const noexcept;
   [[nodiscard]] zobrist_hash get_hash() const noexcept;
+  [[nodiscard]] square get_king_castle_sq(color c) const noexcept;
+  [[nodiscard]] square get_rook_castle_sq(color c,
+                                          castle_side cs) const noexcept;
 
+  template <bool use_side_to_move = true>
+  [[nodiscard]] bool is_check() const noexcept;
   [[nodiscard]] bool is_sq_empty(square sq) const noexcept;
+  [[nodiscard]] bool can_do_castle(color c, castle_side cs) const noexcept;
+
+  template <typename sq_or_bb>
+    requires(std::same_as<sq_or_bb, square> || std::same_as<sq_or_bb, bitboard>)
+  [[nodiscard]] bitboard attacks_to(sq_or_bb targets) const noexcept;
+  template <color side>
+  [[nodiscard]] bitboard attacks_by_color() const noexcept;
 
   void do_move(move move) noexcept;
   void undo_move() noexcept;
@@ -87,5 +102,72 @@ private:
 
   [[nodiscard]] std::string castle_fen_field() const noexcept;
 };
+
+template <bool use_side_to_move> bool board::is_check() const noexcept {
+  const auto side{use_side_to_move ? _side_to_move : ~_side_to_move};
+  const auto king{utils::make_piece(side, piece_type::king)};
+  const square king_sq{get_piece_bb(king)};
+
+  const auto enemy_bb{get_color_bb(~side)};
+  const auto checkers{attacks_to(king_sq) & enemy_bb};
+  return !checkers.is_empty();
+}
+
+template <typename sq_or_bb>
+  requires(std::same_as<sq_or_bb, square> || std::same_as<sq_or_bb, bitboard>)
+bitboard board::attacks_to(sq_or_bb targets) const noexcept {
+  const auto w_pawns{_piece_bbs[std::to_underlying(piece::w_pawn)]};
+  const auto b_pawns{_piece_bbs[std::to_underlying(piece::b_pawn)]};
+  const auto knights{_piece_bbs[std::to_underlying(piece::w_knight)] |
+                     _piece_bbs[std::to_underlying(piece::b_knight)]};
+  const auto bishops{_piece_bbs[std::to_underlying(piece::w_bishop)] |
+                     _piece_bbs[std::to_underlying(piece::b_bishop)]};
+  const auto rooks{_piece_bbs[std::to_underlying(piece::w_rook)] |
+                   _piece_bbs[std::to_underlying(piece::b_rook)]};
+  const auto queens{_piece_bbs[std::to_underlying(piece::w_queen)] |
+                    _piece_bbs[std::to_underlying(piece::b_queen)]};
+  const auto kings{_piece_bbs[std::to_underlying(piece::w_king)] |
+                   _piece_bbs[std::to_underlying(piece::b_king)]};
+  const auto blockers{get_occupied_bb()};
+
+  return (attacks::pawn_attacks<color::white>(targets) & b_pawns) |
+         (attacks::pawn_attacks<color::black>(targets) & w_pawns) |
+         (attacks::knight_attacks(targets) & knights) |
+         (attacks::slider_attacks<piece_type::bishop>(targets, blockers) &
+          (bishops | queens)) |
+         (attacks::slider_attacks<piece_type::rook>(targets, blockers) &
+          (rooks | queens)) |
+         (attacks::king_attacks(targets) & kings);
+}
+
+template <color side> bitboard board::attacks_by_color() const noexcept {
+  // TODO : maybe store attack maps and incrementally update
+  //        i.e. benchmark this
+
+  bitboard attacks{constants::bb::empty};
+
+  const auto pawn{(side == color::white) ? piece::w_pawn : piece::b_pawn};
+  attacks |= attacks::pawn_attacks<side>(get_piece_bb(pawn));
+
+  const auto knight{(side == color::white) ? piece::w_knight : piece::b_knight};
+  attacks |= attacks::knight_attacks(get_piece_bb(knight));
+
+  const auto bishop{(side == color::white) ? piece::w_bishop : piece::b_bishop};
+  attacks |= attacks::slider_attacks<piece_type::bishop>(get_piece_bb(bishop),
+                                                         get_occupied_bb());
+
+  const auto rook{(side == color::white) ? piece::w_rook : piece::b_rook};
+  attacks |= attacks::slider_attacks<piece_type::rook>(get_piece_bb(rook),
+                                                       get_occupied_bb());
+
+  const auto queen{(side == color::white) ? piece::w_queen : piece::b_queen};
+  attacks |= attacks::slider_attacks<piece_type::queen>(get_piece_bb(queen),
+                                                        get_occupied_bb());
+
+  const auto king{(side == color::white) ? piece::w_king : piece::b_king};
+  attacks |= attacks::king_attacks(get_piece_bb(king));
+
+  return attacks;
+}
 
 } // namespace mpham_chess

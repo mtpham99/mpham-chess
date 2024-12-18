@@ -66,18 +66,25 @@ enum class piece_type {
   no_piece_type
 };
 
+template <piece_type pt>
+concept slider_pt = requires() {
+  pt == piece_type::bishop || pt == piece_type::rook || pt == piece_type::queen;
+};
+
+// clang-format off
 enum class piece {
-  // clang-format off
   w_pawn, w_knight, w_bishop, w_rook, w_queen, w_king,
   b_pawn, b_knight, b_bishop, b_rook, b_queen, b_king,
   no_piece
-  // clang-format on
 };
+// clang-format on
 
 enum class castle_side { king, queen };
 
+[[nodiscard]] constexpr castle_side operator~(castle_side cs) noexcept;
+
+// clang-format off
 enum class castle_rights : std::uint8_t {
-  // clang-format off
   no_castle      = 0b0000,
   w_king         = 0b0001,
   w_queen        = 0b0010,
@@ -94,8 +101,8 @@ enum class castle_rights : std::uint8_t {
   w_king_b_both  = 0b1101,
   w_queen_b_both = 0b1110,
   wb_both        = 0b1111
-  // clang-format on
 };
+// clang-format on
 
 constexpr castle_rights &operator&=(castle_rights &lhs,
                                     castle_rights rhs) noexcept;
@@ -130,6 +137,14 @@ enum class direction {
   NWW = NW + W,
   NNW = NW + N
 };
+
+// clang-format off
+template <direction dir>
+concept ray_dir = requires() {
+  dir == direction::N || dir == direction::E || dir == direction::S || dir == direction::W
+  || dir == direction::NE || dir == direction::SE || dir == direction::SW || dir == direction::NW;
+};
+// clang-format on
 
 enum class flip_type { vert, horiz, diag, antidiag };
 
@@ -188,6 +203,10 @@ constexpr square operator-(square sq, int shift) noexcept {
 }
 
 constexpr bool operator!(square sq) noexcept { return sq == square::no_square; }
+
+constexpr castle_side operator~(castle_side cs) noexcept {
+  return (cs == castle_side::king) ? castle_side::queen : castle_side::king;
+}
 
 constexpr castle_rights &operator&=(castle_rights &lhs,
                                     castle_rights rhs) noexcept {

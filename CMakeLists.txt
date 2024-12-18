@@ -8,6 +8,10 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+  add_compile_options("-fconstexpr-steps=9999999")
+endif()
+
 add_subdirectory(${PROJECT_SOURCE_DIR}/src)
 
 if(CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)

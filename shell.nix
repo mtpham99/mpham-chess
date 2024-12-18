@@ -20,6 +20,9 @@ pkgs.mkShell.override { stdenv = pkgs."clang${version}Stdenv"; } {
 		pkgs.include-what-you-use
 		pkgs.cmake-format
 		pkgs.cmake-lint
+
+		# python3 (python script used for generating test cases)
+		pkgs.python3
 	];
 
 	shellHook = ''

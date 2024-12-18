@@ -1,5 +1,6 @@
 #include "mpham_chess/board.hpp"
 
+#include "mpham_chess/attacks.hpp"
 #include "mpham_chess/bitboard.hpp"
 #include "mpham_chess/constants.hpp"
 #include "mpham_chess/enums.hpp"
@@ -74,12 +75,6 @@ void board::load_fen(std::string_view fen) noexcept {
       }
     }
   }
-  _castle_king_sqs = {
-      square{_piece_bbs[std::to_underlying(
-          utils::make_piece(color::white, piece_type::king))]},
-      square{_piece_bbs[std::to_underlying(
-          utils::make_piece(color::black, piece_type::king))]},
-  };
 
   if (color_field == "w") {
     _side_to_move = color::white;
@@ -89,14 +84,12 @@ void board::load_fen(std::string_view fen) noexcept {
   }
 
   auto rook_file_of_castle = [this](color c, castle_side cs) -> file {
-    // TODO : replace with inbetween_sqs to ensure rook on correct side
     const auto rook{utils::make_piece(c, piece_type::rook)};
-    const auto rooks_bb{_piece_bbs[std::to_underlying(rook)]};
     const auto castle_rank{(c == color::white) ? rank::rank_1 : rank::rank_8};
-    const auto rook_mask{rooks_bb & bitboard{castle_rank}};
+    const auto rook_mask{get_piece_bb(rook) & bitboard{castle_rank}};
     const auto castle_rook_sq{cs == castle_side::king
-                                  ? rook_mask.get_msb<square>()
-                                  : rook_mask.get_lsb<square>()};
+                                  ? rook_mask.template get_msb<square>()
+                                  : rook_mask.template get_lsb<square>()};
     return utils::file_of(castle_rook_sq);
   };
 
@@ -104,8 +97,7 @@ void board::load_fen(std::string_view fen) noexcept {
     const auto castle_rank{(c == color::white) ? rank::rank_1 : rank::rank_8};
     const auto rook_sq{utils::make_square(rook_file, castle_rank)};
     const auto king{utils::make_piece(c, piece_type::king)};
-    const auto king_bb{_piece_bbs[std::to_underlying(king)]};
-    const square king_sq{king_bb & bitboard{castle_rank}};
+    const square king_sq{get_piece_bb(king) & bitboard{castle_rank}};
     return (rook_sq < king_sq) ? castle_side::queen : castle_side::king;
   };
 
@@ -137,6 +129,12 @@ void board::load_fen(std::string_view fen) noexcept {
           (castle_color == color::white) ? rank::rank_1 : rank::rank_8)};
       _castle_rook_sqs[std::to_underlying(castle_color)]
                       [std::to_underlying(castle_rook_side)] = castle_rook_sq;
+
+      const auto king{(castle_color == color::white) ? piece::w_king
+                                                     : piece::b_king};
+      _castle_king_sqs[std::to_underlying(castle_color)] =
+          square{get_piece_bb(king)};
+
       _castle |= utils::make_castle_rights(castle_color, castle_rook_side);
     }
   }
@@ -189,7 +187,7 @@ std::string board::to_fen() const noexcept {
 
   fen += (_side_to_move == color::white) ? " w " : " b ";
   fen += castle_fen_field() + ' ';
-  fen += utils::sq_to_str(_ep_sq) + ' ';
+  fen += std::string{utils::sq_to_str(_ep_sq)} + ' ';
   fen += std::to_string(_rule50) + ' ';
   fen += std::to_string(get_movenum());
 
@@ -237,6 +235,71 @@ unsigned int board::get_ply() const noexcept { return _move_hist.size(); }
 
 zobrist_hash board::get_hash() const noexcept { return _hash; }
 
+square board::get_king_castle_sq(color c) const noexcept {
+  return _castle_king_sqs[std::to_underlying(c)];
+}
+
+square board::get_rook_castle_sq(color c, castle_side cs) const noexcept {
+  return _castle_rook_sqs[std::to_underlying(c)][std::to_underlying(cs)];
+}
+
+bool board::is_sq_empty(square sq) const noexcept {
+  assert(sq != square::no_square);
+  return _piece_list[std::to_underlying(sq)] == piece::no_piece;
+}
+
+bool board::can_do_castle(color c, castle_side cs) const noexcept {
+  const auto c_ind{std::to_underlying(c)};
+  const auto cs_ind{std::to_underlying(cs)};
+  const auto castle_ind{cs_ind + c_ind * constants::n_castle_sides};
+  const auto castle_flag{
+      (c == color::white)
+          ? ((cs == castle_side::king) ? castle_rights::w_king
+                                       : castle_rights::w_queen)
+          : ((cs == castle_side::king) ? castle_rights::b_king
+                                       : castle_rights::b_queen)};
+
+  const auto has_castle_rights{!!(_castle & castle_flag)};
+  if (!has_castle_rights) {
+    return false;
+  }
+
+  const auto king_from_sq{get_king_castle_sq(c)};
+  const auto rook_from_sq{get_rook_castle_sq(c, cs)};
+  const auto king_to_sq{
+      (c == color::white)
+          ? ((cs == castle_side::king) ? square::g1 : square::c1)
+          : ((cs == castle_side::king) ? square::g8 : square::c8)};
+  const auto rook_to_sq{
+      (c == color::white)
+          ? ((cs == castle_side::king) ? square::f1 : square::d1)
+          : ((cs == castle_side::king) ? square::f8 : square::d8)};
+
+  const bitboard all_castle_sqs_bb{king_from_sq, king_to_sq, rook_from_sq,
+                                   rook_to_sq};
+  const auto left_most_sq{all_castle_sqs_bb.template get_lsb<square>()};
+  const auto right_most_sq{all_castle_sqs_bb.template get_msb<square>()};
+  const auto castle_path{
+      (attacks::inbetween_squares(left_most_sq, right_most_sq) |
+       bitboard{left_most_sq, right_most_sq}) &
+      ~bitboard{king_from_sq, rook_from_sq}};
+  const auto is_castle_path_empty{(castle_path & get_occupied_bb()).is_empty()};
+  if (!is_castle_path_empty) {
+    return false;
+  }
+
+  const auto king_path{attacks::inbetween_squares(king_from_sq, king_to_sq) |
+                       bitboard{king_from_sq, king_to_sq}};
+  const auto checks_bb{(c == color::white) ? attacks_by_color<color::black>()
+                                           : attacks_by_color<color::white>()};
+  const auto is_castle_safe{(king_path & checks_bb).is_empty()};
+  if (!is_castle_safe) {
+    return false;
+  }
+
+  return true;
+}
+
 void board::do_move(move move) noexcept {
   const auto side{_side_to_move}, enemy{~side};
   const auto from{move.get_from_square()};
@@ -246,6 +309,49 @@ void board::do_move(move move) noexcept {
                         ? utils::make_piece(~side, piece_type::pawn)
                         : get_piece_on_sq(to)};
   assert((pc != piece::no_piece) && (utils::color_of(pc) == side));
+
+  _state_hist.emplace_back(_hash, _rule50, _ep_sq, cap_pc, _castle);
+
+  _side_to_move = ~_side_to_move;
+  _hash ^= zobrist::get_color_hash();
+  _rule50 = (move.is_capture() || (utils::piecetype_of(pc) == piece_type::pawn))
+                ? 0
+                : _rule50 + 1;
+
+  if (_ep_sq != square::no_square) {
+    _hash ^= zobrist::get_enpassant_hash(_ep_sq);
+  }
+  _ep_sq = square::no_square;
+  if (move.is_double_pawn_push()) {
+    assert(pc == utils::make_piece(side, piece_type::pawn));
+
+    const auto enemy_pawn{utils::make_piece(enemy, piece_type::pawn)};
+    const auto neighbor_bb{shift<direction::E>(bitboard{to}) |
+                           shift<direction::W>(bitboard{to})};
+    const auto enemy_pawn_bb{get_piece_bb(enemy_pawn)};
+
+    if (neighbor_bb & enemy_pawn_bb) {
+      const auto backward{(side == color::white) ? direction::S : direction::N};
+      _ep_sq = to + std::to_underlying(backward);
+      _hash ^= zobrist::get_enpassant_hash(_ep_sq);
+    }
+  }
+
+  const auto side_cr{(side == color::white) ? castle_rights::w_both
+                                            : castle_rights::b_both};
+  const auto can_castle{!!(_castle & side_cr)};
+  if (can_castle && (pc == utils::make_piece(side, piece_type::king))) {
+    _castle &= ~side_cr;
+  } else if (can_castle && (pc == utils::make_piece(side, piece_type::rook))) {
+    for (auto cs : {castle_side::king, castle_side::queen}) {
+      if (_castle_rook_sqs[std::to_underlying(side)][std::to_underlying(cs)] ==
+          from) {
+        _castle &= ~utils::make_castle_rights(side, cs);
+      }
+    }
+  }
+
+  _move_hist.emplace_back(move);
 
   if (move.is_capture()) {
     const auto backward{(side == color::white) ? direction::S : direction::N};
@@ -258,10 +364,10 @@ void board::do_move(move move) noexcept {
 
     const auto enemy_cr{(enemy == color::white) ? castle_rights::w_both
                                                 : castle_rights::b_both};
-    const auto enemy_can_castle{!!(_castle & enemy_cr)};
+    const auto enemy_has_castle_rights{!!(_castle & enemy_cr)};
     const auto is_cap_pc_rook{cap_pc ==
                               utils::make_piece(enemy, piece_type::rook)};
-    if (enemy_can_castle && is_cap_pc_rook) {
+    if (enemy_has_castle_rights && is_cap_pc_rook) {
       for (auto cs : {castle_side::king, castle_side::queen}) {
         if (_castle_rook_sqs[std::to_underlying(enemy)]
                             [std::to_underlying(cs)] == cap_sq) {
@@ -287,62 +393,23 @@ void board::do_move(move move) noexcept {
            (std::to_underlying(from) < std::to_underlying(to)));
 
     const auto rook_from{to};
-    const auto rook_to{
-        is_king_castle ? ((side == color::white) ? square::f1 : square::f8)
-                       : ((side == color::white) ? square::d1 : square::d8)};
+    const auto rook_to{(side == color::white)
+                           ? (is_king_castle ? square::f1 : square::d1)
+                           : (is_king_castle ? square::f8 : square::d8)};
     const auto king_from{from};
-    const auto king_to{
-        is_king_castle ? ((side == color::white) ? square::g1 : square::g8)
-                       : ((side == color::white) ? square::c1 : square::c8)};
+    const auto king_to{(side == color::white)
+                           ? (is_king_castle ? square::g1 : square::c1)
+                           : (is_king_castle ? square::g8 : square::c8)};
 
-    move_piece(rook_from, rook_to);
-    move_piece(king_from, king_to);
+    const auto king{(side == color::white) ? piece::w_king : piece::b_king};
+    const auto rook{(side == color::white) ? piece::w_rook : piece::b_rook};
+    remove_piece(king_from);
+    remove_piece(rook_from);
+    place_piece(king_to, king);
+    place_piece(rook_to, rook);
   } else {
     move_piece(from, to);
   }
-
-  _state_hist.emplace_back(_hash, _rule50, _ep_sq, cap_pc, _castle);
-
-  _side_to_move = ~_side_to_move;
-  _hash ^= zobrist::get_color_hash();
-  _rule50 = (move.is_capture() || (utils::piecetype_of(pc) == piece_type::pawn))
-                ? 0
-                : _rule50 + 1;
-
-  if (_ep_sq != square::no_square) {
-    _hash ^= zobrist::get_enpassant_hash(_ep_sq);
-  }
-  _ep_sq = square::no_square;
-  if (move.is_double_pawn_push()) {
-    assert(pc == utils::make_piece(side, piece_type::pawn));
-
-    const auto enemy_pawn{utils::make_piece(enemy, piece_type::pawn)};
-    const auto neighbor_bb{shift<direction::E>(bitboard{to}) |
-                           shift<direction::W>(bitboard{to})};
-    const auto enemy_pawn_bb{_piece_bbs[std::to_underlying(enemy_pawn)]};
-
-    if (neighbor_bb & enemy_pawn_bb) {
-      const auto backward{(side == color::white) ? direction::S : direction::N};
-      _ep_sq = to + std::to_underlying(backward);
-      _hash ^= zobrist::get_enpassant_hash(_ep_sq);
-    }
-  }
-
-  const auto side_cr{(side == color::white) ? castle_rights::w_both
-                                            : castle_rights::b_both};
-  const auto can_castle{!!(_castle & side_cr)};
-  if (can_castle && (pc == utils::make_piece(side, piece_type::king))) {
-    _castle &= ~side_cr;
-  } else if (can_castle && (pc == utils::make_piece(side, piece_type::rook))) {
-    for (auto cs : {castle_side::king, castle_side::queen}) {
-      if (_castle_rook_sqs[std::to_underlying(side)][std::to_underlying(cs)] ==
-          from) {
-        _castle &= ~utils::make_castle_rights(side, cs);
-      }
-    }
-  }
-
-  _move_hist.emplace_back(move);
 }
 
 void board::undo_move() noexcept {
@@ -382,8 +449,12 @@ void board::undo_move() noexcept {
         is_king_castle ? ((side == color::white) ? square::g1 : square::g8)
                        : ((side == color::white) ? square::c1 : square::c8)};
 
-    move_piece(rook_to, rook_from);
-    move_piece(king_to, king_from);
+    const auto king{(side == color::white) ? piece::w_king : piece::b_king};
+    const auto rook{(side == color::white) ? piece::w_rook : piece::b_rook};
+    remove_piece(king_to);
+    remove_piece(rook_to);
+    place_piece(king_from, king);
+    place_piece(rook_from, rook);
   } else {
     move_piece(to, from);
   }
@@ -397,7 +468,7 @@ void board::undo_move() noexcept {
 }
 
 void board::move_piece(square from, square to) noexcept {
-  assert(from != to && from != square::no_square && to != square::no_square);
+  assert(from != square::no_square && to != square::no_square);
   const auto pc{get_piece_on_sq(from)};
   [[maybe_unused]] const auto to_pc{get_piece_on_sq(to)};
   assert(pc != piece::no_piece && to_pc == piece::no_piece);
@@ -460,13 +531,13 @@ std::string board::castle_fen_field() const noexcept {
     } else {
       const auto castle_rank{(c == color::white) ? rank::rank_1 : rank::rank_8};
       const auto rook{utils::make_piece(c, piece_type::rook)};
-      const auto rook_bb{_piece_bbs[std::to_underlying(rook)]};
 
-      // TODO : replace with inbetween_sqs to ensure rook on correct side
-      const auto castle_rank_rooks_bb{rook_bb & bitboard{castle_rank}};
-      const auto outer_rook_sq{(cs == castle_side::king)
-                                   ? castle_rank_rooks_bb.get_msb<square>()
-                                   : castle_rank_rooks_bb.get_lsb<square>()};
+      const auto castle_rank_rooks_bb{get_piece_bb(rook) &
+                                      bitboard{castle_rank}};
+      const auto outer_rook_sq{
+          (cs == castle_side::king)
+              ? castle_rank_rooks_bb.template get_msb<square>()
+              : castle_rank_rooks_bb.template get_lsb<square>()};
       if (outer_rook_sq != _castle_rook_sqs[c_ind][cs_ind]) {
         const auto castle_rook_file{
             utils::file_of(_castle_rook_sqs[c_ind][cs_ind])};
@@ -496,13 +567,13 @@ std::string board::castle_fen_field() const noexcept {
   return fen;
 }
 
-std::ostream &operator<<(std::ostream &os, const board &board) noexcept {
+std::ostream &operator<<(std::ostream &os, const board &pos) noexcept {
   const auto side_str{
-      ((board.get_side_to_move() == color::white) ? "white" : "black")};
-  const auto move_num{board.get_movenum()};
+      ((pos.get_side_to_move() == color::white) ? "white" : "black")};
+  const auto move_num{pos.get_movenum()};
 
   os << "Move #" << move_num << '\n';
-  os << "Rule50: " << board.get_rule50() << '\n';
+  os << "Rule50: " << pos.get_rule50() << '\n';
   os << "Color: " << side_str << '\n';
 
   os << "  ===================\n";
@@ -523,7 +594,7 @@ std::ostream &operator<<(std::ostream &os, const board &board) noexcept {
       os << file_label << " | ";
     }
 
-    const auto pc{board.get_piece_on_sq(sq)};
+    const auto pc{pos.get_piece_on_sq(sq)};
     const auto pc_char{(pc == piece::no_piece) ? '.'
                                                : utils::piece_to_char(pc)};
     os << pc_char << ' ';
@@ -535,13 +606,13 @@ std::ostream &operator<<(std::ostream &os, const board &board) noexcept {
   os << "  ===================\n";
   os << "    A B C D E F G H\n";
 
-  const auto ep_sq{board.get_ep_sq()};
+  const auto ep_sq{pos.get_ep_sq()};
   const auto ep_str{(ep_sq == square::no_square) ? "-"
                                                  : utils::sq_to_str(ep_sq)};
-  os << "FEN: \"" << board.to_fen() << "\"\n";
+  os << "FEN: \"" << pos.to_fen() << "\"\n";
   os << "Enpassant: " << ep_str << '\n';
-  os << "Castle: " << board.castle_fen_field() << '\n';
-  os << "Hash: " << board.get_hash() << '\n';
+  os << "Castle: " << pos.castle_fen_field() << '\n';
+  os << "Hash: " << pos.get_hash() << '\n';
 
   return os;
 }
